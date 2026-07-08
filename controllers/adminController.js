@@ -7,6 +7,27 @@ const sanitizeUser = (user) => {
   return { _id, name, email, role, faculty, department, academicYear, clubName, createdAt, updatedAt };
 };
 
+const timeToMinutes = (value) => {
+  if (!value) return 0;
+  const [hours, minutes] = String(value).split(":").map(Number);
+  return hours * 60 + (minutes || 0);
+};
+
+const isOverlapping = (eventA, eventB) => {
+  if (!eventA?.date || !eventB?.date) return false;
+
+  const dateA = new Date(eventA.date).toISOString().split("T")[0];
+  const dateB = new Date(eventB.date).toISOString().split("T")[0];
+  if (dateA !== dateB) return false;
+
+  const startA = timeToMinutes(eventA.startTime);
+  const endA = timeToMinutes(eventA.endTime);
+  const startB = timeToMinutes(eventB.startTime);
+  const endB = timeToMinutes(eventB.endTime);
+
+  return startA < endB && startB < endA;
+};
+
 const ensureSystemAdmin = (req, res) => {
   if (!req.user) {
     res.status(401).json({ message: "Authentication required" });
@@ -166,37 +187,82 @@ const getConflicts = async (req, res) => {
 
   try {
     const events = await Event.find({ status: { $in: ["approved", "pending"] } }).lean();
-    const grouped = events.reduce((acc, event) => {
-      const dateKey = event.date ? new Date(event.date).toISOString().split("T")[0] : "";
-      const key = `${event.location || ""}_${dateKey}_${event.startTime || ""}`;
-      acc[key] = acc[key] || [];
-      acc[key].push(event);
-      return acc;
-    }, {});
+    const conflicts = [];
 
-    const conflicts = Object.values(grouped)
-      .filter((group) => group.length > 1)
-      .flatMap((group) => {
-        const conflictPairs = [];
-        for (let i = 0; i < group.length; i += 1) {
-          for (let j = i + 1; j < group.length; j += 1) {
-            conflictPairs.push({
-              id: `${group[i]._id}_${group[j]._id}`,
-              event1: `${group[i].title} (${group[i].clubName})`,
-              event2: `${group[j].title} (${group[j].clubName})`,
-              location: group[i].location,
-              date: new Date(group[i].date).toISOString().split("T")[0],
-              time: group[i].startTime,
-            });
-          }
-        }
-        return conflictPairs;
-      });
+    for (let i = 0; i < events.length; i += 1) {
+      for (let j = i + 1; j < events.length; j += 1) {
+        const first = events[i];
+        const second = events[j];
+
+        if (first._id.toString() === second._id.toString()) continue;
+        if (!isOverlapping(first, second)) continue;
+
+        conflicts.push({
+          id: `${first._id}_${second._id}`,
+          event1Id: first._id.toString(),
+          event2Id: second._id.toString(),
+          event1: `${first.title} (${first.clubName})`,
+          event2: `${second.title} (${second.clubName})`,
+          location: first.location,
+          date: new Date(first.date).toISOString().split("T")[0],
+          time: `${first.startTime} - ${first.endTime}`,
+        });
+      }
+    }
 
     res.json(conflicts);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Unable to fetch conflicts", error: error.message });
+  }
+};
+
+const resolveConflict = async (req, res) => {
+  if (!ensureSystemAdmin(req, res)) return;
+
+  try {
+    const { eventId } = req.params;
+    const event = await Event.findById(eventId);
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    const allEvents = await Event.find({
+      _id: { $ne: event._id },
+      status: { $in: ["approved", "pending"] },
+      date: event.date,
+    }).lean();
+
+    const candidateVenues = ["Main Hall", "Lecture Room A", "Conference Room", "Auditorium", "Open Ground", "Seminar Room"];
+    const nextVenue = candidateVenues.find((venue) => !allEvents.some((candidate) => candidate.location?.toLowerCase() === venue.toLowerCase()));
+
+    if (nextVenue) {
+      event.location = nextVenue;
+      await event.save();
+      return res.json({ message: "Event moved to an alternate venue", event });
+    }
+
+    const nextDay = new Date(event.date);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const sameDayConflict = allEvents.some((candidate) => candidate.date && new Date(candidate.date).toISOString().split("T")[0] === nextDay.toISOString().split("T")[0]);
+
+    if (!sameDayConflict) {
+      event.date = nextDay;
+      await event.save();
+      return res.json({ message: "Event moved to another date", event });
+    }
+
+    const newStartTime = timeToMinutes(event.startTime) + 60;
+    const newEndTime = timeToMinutes(event.endTime) + 60;
+    event.startTime = `${String(Math.floor(newStartTime / 60)).padStart(2, "0")}:${String(newStartTime % 60).padStart(2, "0")}`;
+    event.endTime = `${String(Math.floor(newEndTime / 60)).padStart(2, "0")}:${String(newEndTime % 60).padStart(2, "0")}`;
+    await event.save();
+
+    res.json({ message: "Event moved to another time slot", event });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Unable to resolve conflict", error: error.message });
   }
 };
 
@@ -207,4 +273,5 @@ module.exports = {
   getClubs,
   createClub,
   getConflicts,
+  resolveConflict,
 };

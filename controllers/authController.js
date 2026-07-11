@@ -2,6 +2,14 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
+//
+const validatePassword = (password) => {
+  const passwordPattern =
+    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&.#_-]).{8,}$/;
+
+  return passwordPattern.test(password);
+};
+//
 const createToken = (user) => {
   return jwt.sign(
     {
@@ -29,6 +37,14 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
+    //
+    if (!validatePassword(password)) {
+  return res.status(400).json({
+    message:
+      "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.",
+  });
+}
+//
     if (role === "student") {
       if (!faculty || !department || !academicYear) {
         return res.status(400).json({ message: "Student registration requires faculty, department, and academic year." });

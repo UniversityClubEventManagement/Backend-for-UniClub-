@@ -79,6 +79,7 @@ const createEvent = async (req, res) => {
       registrationDeadline,
       clubName: requestedClubName,
       bannerUrl,
+      posterUrl,
     } = req.body;
 
     if (!title || !description || !category || !date || !startTime || !endTime || !location || !registrationDeadline) {
@@ -110,6 +111,7 @@ const createEvent = async (req, res) => {
       registrationDeadline,
       clubName,
       bannerUrl,
+      posterUrl,
       createdBy: req.user.id,
       status: "pending",
     });
@@ -148,6 +150,7 @@ const updateEvent = async (req, res) => {
       registrationLimit,
       registrationDeadline,
       bannerUrl,
+      posterUrl,
     } = req.body;
 
     event.title = title || event.title;
@@ -160,6 +163,7 @@ const updateEvent = async (req, res) => {
     event.registrationLimit = Number(registrationLimit) || event.registrationLimit;
     event.registrationDeadline = registrationDeadline || event.registrationDeadline;
     event.bannerUrl = bannerUrl || event.bannerUrl;
+    event.posterUrl = posterUrl || event.posterUrl;
 
     await event.save();
     res.json({ message: "Event updated successfully", event });
@@ -254,13 +258,128 @@ const getMyEvents = async (req, res) => {
   }
 };
 
+const searchClubEvents = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const search = req.query.search || "";
+
+    const query = {
+      createdBy: req.user.id,
+      $or: [
+        { title: { $regex: search, $options: "i" } },
+        { clubName: { $regex: search, $options: "i" } },
+        { location: { $regex: search, $options: "i" } }
+      ]
+    };
+
+    const events = await Event.find(query);
+
+    res.json(events);
+  } catch (error) {
+    res.status(500).json({
+      message: "Search failed",
+      error: error.message
+    });
+  }
+};
+
+const searchPublicEvents = async (req, res) => {
+  try {
+    const search = req.query.search || "";
+
+    const query = {
+      status: "approved",
+      $or: [
+        { title: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { clubName: { $regex: search, $options: "i" } },
+        { location: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } }
+      ]
+    };
+
+    const events = await Event.find(query).populate("createdBy", "name clubName").lean();
+    const userId = req.user?.id;
+
+    const result = events.map((event) => {
+      const attendees = event.registeredUsers?.length || 0;
+      return {
+        ...event,
+        attendees,
+        isRegistered: userId ? event.registeredUsers.some((id) => id.toString() === userId) : false,
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      message: "Search failed",
+      error: error.message
+    });
+  }
+};
+
+const uploadEventImage = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: "No file provided" });
+    }
+
+    const { type } = req.body; // 'banner' or 'poster'
+    if (!type || !['banner', 'poster'].includes(type)) {
+      return res.status(400).json({ message: "Image type must be 'banner' or 'poster'" });
+    }
+
+    const { eventId } = req.params;
+    const event = await Event.findById(eventId);
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    if (event.createdBy.toString() !== req.user.id && req.user.role !== "system-admin") {
+      return res.status(403).json({ message: "You do not have permission to update this event" });
+    }
+
+    // Store file in memory or temporary location - for production, use cloud storage like AWS S3
+    const fileUrl = `/uploads/${type}-${Date.now()}-${req.file.originalname}`;
+    
+    if (type === 'banner') {
+      event.bannerUrl = fileUrl;
+    } else {
+      event.posterUrl = fileUrl;
+    }
+
+    await event.save();
+
+    res.json({ 
+      message: `${type} uploaded successfully`, 
+      url: fileUrl,
+      event 
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Unable to upload image", error: error.message });
+  }
+};
+
 module.exports = {
-  getEvents,
-  getEventById,
-  getClubEvents,
-  createEvent,
-  updateEvent,
-  deleteEvent,
-  toggleRegistration,
-  getMyEvents,
+    getEvents,
+    getEventById,
+    getClubEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    toggleRegistration,
+    getMyEvents,
+    searchClubEvents,
+    searchPublicEvents,
+    uploadEventImage
 };

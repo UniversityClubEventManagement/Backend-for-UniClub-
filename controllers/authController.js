@@ -221,9 +221,38 @@ const updateStudentProfile = async (req, res) => {
   }
 };
 
+const deleteStudentProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+
+    const deactivatedUser = await User.findByIdAndUpdate(
+      userId,
+      { isActive: false },
+      { new: true }
+    ).select("-password");
+
+    if (!deactivatedUser) {
+      return res.status(404).json({
+        message: "Student profile not found",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Student profile deactivated successfully",
+    });
+  } catch (error) {
+    console.error("Delete profile error:", error);
+    return res.status(500).json({
+      message: "Unable to deactivate student profile",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getStudentProfile,
   updateStudentProfile,
+  deleteStudentProfile
 };

@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const eventSchema = new mongoose.Schema(
@@ -39,6 +40,12 @@ const eventSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /*
+    registrationLimit: {
+      type: Number,
+      default: 0,
+    },*/
+    
     registrationDeadline: {
       type: Date,
       required: [true, "Registration deadline is required"],

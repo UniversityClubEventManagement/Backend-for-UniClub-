@@ -369,6 +369,19 @@ const uploadEventImage = async (req, res) => {
     res.status(500).json({ message: "Unable to upload image", error: error.message });
   }
 };
+/* module.exports = {
+    getEvents,
+    getEventById,
+    getClubEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    toggleRegistration,
+    getMyEvents,
+    searchClubEvents,
+    searchPublicEvents,
+    uploadEventImage
+};*/
 
 module.exports = {
     getEvents,

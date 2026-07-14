@@ -156,7 +156,33 @@ const loginUser = async (req, res) => {
   }
 };
 
+const getStudentProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+
+    const user = await User.findById(userId).select("-password");
+
+    if (!user || user.isActive === false) {
+      return res.status(404).json({
+        message: "Student profile not found",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Student profile fetched successfully",
+      user: sanitizeUser(user.toObject()),
+    });
+  } catch (error) {
+    console.error("Get profile error:", error);
+    return res.status(500).json({
+      message: "Unable to fetch student profile",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
+  getStudentProfile,
 };

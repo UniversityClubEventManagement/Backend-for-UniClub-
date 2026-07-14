@@ -181,8 +181,49 @@ const getStudentProfile = async (req, res) => {
   }
 };
 
+const updateStudentProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+
+    const { name, faculty, department, academicYear, clubName } = req.body;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        name,
+        faculty,
+        department,
+        academicYear,
+        clubName,
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).select("-password");
+
+    if (!updatedUser || updatedUser.isActive === false) {
+      return res.status(404).json({
+        message: "Student profile not found",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Student profile updated successfully",
+      user: sanitizeUser(updatedUser.toObject()),
+    });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    return res.status(500).json({
+      message: "Unable to update student profile",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getStudentProfile,
+  updateStudentProfile,
 };

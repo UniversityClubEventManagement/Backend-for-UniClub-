@@ -1,3 +1,4 @@
+
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
@@ -16,7 +17,7 @@ const {
 } = require("../controllers/eventController");
 const { protect, optionalProtect } = require("../middleware/authMiddleware");
 
-// Configure multer for file uploads
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
@@ -44,3 +45,4 @@ router.post("/:id/register", protect, toggleRegistration);
 router.post("/:eventId/upload", protect, upload.single("image"), uploadEventImage);
 
 module.exports = router;
+//module.exports = router;

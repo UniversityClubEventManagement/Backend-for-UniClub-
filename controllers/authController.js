@@ -35,8 +35,8 @@ const registerUser = async (req, res) => {
 
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: "Missing required fields" });
-      const normalizedEmail = email.toLowerCase().trim();
     }
+     const normalizedEmail = email.toLowerCase().trim();
 
     //
     if (!validatePassword(password)) {
@@ -98,8 +98,9 @@ const loginUser = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
-      const normalizedEmail = email.toLowerCase().trim();
     }
+    
+const normalizedEmail = email.toLowerCase().trim();
 
     if (email === "admin@gmail.com" && password === "admin") {
       const systemAdminUser = {

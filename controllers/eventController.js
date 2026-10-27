@@ -1,4 +1,24 @@
 const Event = require("../models/Event");
+const notificationService = require("../services/notificationService");
+
+const notifySafely = async (operation) => {
+  try {
+    await operation();
+  } catch (error) {
+    console.error("Notification delivery failed:", error.message);
+  }
+};
+
+const uploadPoster = async (req, res) => {
+  if (!req.user || !["club-admin", "system-admin"].includes(req.user.role)) {
+    return res.status(403).json({ message: "Only club or system administrators can upload event posters" });
+  }
+  if (!req.file) return res.status(400).json({ message: "Select a PNG or JPG poster image" });
+  res.status(201).json({
+    message: "Poster uploaded successfully",
+    bannerUrl: `/uploads/posters/${req.file.filename}`,
+  });
+};
 
 const getEvents = async (req, res) => {
   try {
@@ -116,6 +136,22 @@ const createEvent = async (req, res) => {
       status: "pending",
     });
 
+    await notifySafely(() =>
+      notificationService.notifyRole("system-admin", {
+        actorUserId: req.user.id,
+        title: "New event awaiting approval",
+        message: `${clubName} submitted “${event.title}” for approval.`,
+        type: "EVENT_SUBMITTED",
+        category: "EVENTS",
+        priority: "MEDIUM",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: "/system-admin",
+        deduplicationKey: `EVENT_SUBMITTED:${event._id}`,
+        metadata: { clubName, submittedAt: event.createdAt },
+      })
+    );
+
     res.status(201).json({ message: "Event created successfully", event });
   } catch (error) {
     console.error(error);
@@ -162,10 +198,28 @@ const updateEvent = async (req, res) => {
     event.location = location || event.location;
     event.registrationLimit = Number(registrationLimit) || event.registrationLimit;
     event.registrationDeadline = registrationDeadline || event.registrationDeadline;
+    if (bannerUrl !== undefined) event.bannerUrl = bannerUrl;
     event.bannerUrl = bannerUrl || event.bannerUrl;
     event.posterUrl = posterUrl || event.posterUrl;
 
+    const wasApproved = event.status === "approved";
+    event.status = wasApproved ? "pending" : event.status;
     await event.save();
+
+    await notifySafely(() =>
+      notificationService.notifyRole("system-admin", {
+        actorUserId: req.user.id,
+        title: wasApproved ? "Approved event edited" : "Event updated",
+        message: `${event.clubName} updated “${event.title}”${wasApproved ? "; approval is required again." : "."}`,
+        type: "EVENT_UPDATED",
+        category: "EVENTS",
+        priority: wasApproved ? "HIGH" : "MEDIUM",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: "/system-admin",
+        deduplicationKey: `EVENT_UPDATED:${event._id}:${event.__v}`,
+      })
+    );
     res.json({ message: "Event updated successfully", event });
   } catch (error) {
     console.error(error);
@@ -232,6 +286,38 @@ const toggleRegistration = async (req, res) => {
     }
 
     await event.save();
+    const registered = !isRegistered;
+
+    await notifySafely(() =>
+      notificationService.notifyUser(req.user.id, {
+        title: registered ? "Registration confirmed" : "Registration cancelled",
+        message: registered
+          ? `You are registered for “${event.title}”.`
+          : `Your registration for “${event.title}” has been cancelled.`,
+        type: registered ? "REGISTRATION_CONFIRMED" : "REGISTRATION_CANCELLED",
+        category: "REGISTRATIONS",
+        priority: "MEDIUM",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: `/events/${event._id}`,
+        deduplicationKey: `${registered ? "REGISTRATION_CONFIRMED" : "REGISTRATION_CANCELLED"}:${event._id}:${req.user.id}:${event.__v}`,
+      })
+    );
+
+    await notifySafely(() =>
+      notificationService.notifyUser(event.createdBy, {
+        title: registered ? "New event registration" : "Registration cancelled",
+        message: `${req.user.name} ${registered ? "registered for" : "cancelled registration for"} “${event.title}”.`,
+        type: registered ? "STUDENT_REGISTERED" : "REGISTRATION_CANCELLED",
+        category: "REGISTRATIONS",
+        priority: "LOW",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: "/club-admin",
+        deduplicationKey: `COORDINATOR_${registered ? "REGISTERED" : "CANCELLED"}:${event._id}:${req.user.id}:${event.__v}`,
+      })
+    );
+
     res.json({ message: isRegistered ? "Registration removed" : "Registered successfully", isRegistered: !isRegistered, attendees: event.registeredUsers.length });
   } catch (error) {
     console.error(error);
@@ -384,6 +470,15 @@ const uploadEventImage = async (req, res) => {
 };*/
 
 module.exports = {
+  getEvents,
+  getEventById,
+  getClubEvents,
+  createEvent,
+  updateEvent,
+  deleteEvent,
+  toggleRegistration,
+  getMyEvents,
+  uploadPoster,
     getEvents,
     getEventById,
     getClubEvents,

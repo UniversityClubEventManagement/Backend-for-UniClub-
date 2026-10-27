@@ -1,6 +1,22 @@
 const bcrypt = require("bcryptjs");
 const Event = require("../models/Event");
 const User = require("../models/User");
+const notificationService = require("../services/notificationService");
+const { isPasswordValid, PASSWORD_POLICY_MESSAGE } = require("../utils/passwordPolicy");
+
+const EVENT_LOCATIONS = [
+  "AUDI", "AVC", "CIV-SR", "DO1", "DO2", "ECC", "EIE-SR", "ELR",
+  "IS-SR", "LIB", "LR1", "LR2", "LT1", "LT2", "MENA-SR", "MME-SR",
+  "NCC", "NLH1", "NLH2", "NLH3", "OCC", "SR",
+];
+
+const notifySafely = async (operation) => {
+  try {
+    await operation();
+  } catch (error) {
+    console.error("Notification delivery failed:", error.message);
+  }
+};
 
 const sanitizeUser = (user) => {
   const { _id, name, email, role, faculty, department, academicYear, clubName, createdAt, updatedAt } = user;
@@ -13,12 +29,18 @@ const timeToMinutes = (value) => {
   return hours * 60 + (minutes || 0);
 };
 
+const minutesToTime = (minutes) =>
+  `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
+const dateKey = (value) => new Date(value).toISOString().split("T")[0];
+
 const isOverlapping = (eventA, eventB) => {
   if (!eventA?.date || !eventB?.date) return false;
 
-  const dateA = new Date(eventA.date).toISOString().split("T")[0];
-  const dateB = new Date(eventB.date).toISOString().split("T")[0];
+  const dateA = dateKey(eventA.date);
+  const dateB = dateKey(eventB.date);
   if (dateA !== dateB) return false;
+  if (String(eventA.location || "").trim().toUpperCase() !== String(eventB.location || "").trim().toUpperCase()) return false;
 
   const startA = timeToMinutes(eventA.startTime);
   const endA = timeToMinutes(eventA.endTime);
@@ -52,13 +74,12 @@ const getAdminStats = async (req, res) => {
     const pendingRequests = await Event.countDocuments({ status: "pending" });
     const approvedEvents = await Event.countDocuments({ status: "approved" });
     const events = await Event.find({ status: { $in: ["approved", "pending"] } }).lean();
-    const grouped = events.reduce((acc, event) => {
-      const dateKey = event.date ? new Date(event.date).toISOString().split("T")[0] : "";
-      const key = `${event.location || ""}_${dateKey}_${event.startTime || ""}`;
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-    const conflictCount = Object.values(grouped).filter((value) => value > 1).length;
+    let conflictCount = 0;
+    for (let i = 0; i < events.length; i += 1) {
+      for (let j = i + 1; j < events.length; j += 1) {
+        if (isOverlapping(events[i], events[j])) conflictCount += 1;
+      }
+    }
 
     res.json({ totalClubs, totalMembers, pendingRequests, approvedEvents, conflictCount });
   } catch (error) {
@@ -100,6 +121,41 @@ const updateEventStatus = async (req, res) => {
 
     event.status = status;
     await event.save();
+
+    await notifySafely(() =>
+      notificationService.notifyUser(event.createdBy, {
+        actorUserId: req.user.id,
+        title: status === "approved" ? "Event approved" : "Event rejected",
+        message:
+          status === "approved"
+            ? `Your event “${event.title}” has been approved.`
+            : `Your event “${event.title}” has been rejected.`,
+        type: status === "approved" ? "EVENT_APPROVED" : "EVENT_REJECTED",
+        category: "EVENTS",
+        priority: status === "approved" ? "MEDIUM" : "HIGH",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: "/club-admin",
+        deduplicationKey: `${status === "approved" ? "EVENT_APPROVED" : "EVENT_REJECTED"}:${event._id}:${event.__v}`,
+      })
+    );
+
+    if (status === "approved") {
+      await notifySafely(() =>
+        notificationService.notifyRole("student", {
+          actorUserId: req.user.id,
+          title: "New event open for registration",
+          message: `“${event.title}” by ${event.clubName} is now open for registration.`,
+          type: "EVENT_APPROVED",
+          category: "EVENTS",
+          priority: "MEDIUM",
+          entityType: "Event",
+          entityId: event._id.toString(),
+          actionUrl: `/events/${event._id}`,
+          deduplicationKey: `EVENT_OPEN:${event._id}:${event.__v}`,
+        })
+      );
+    }
 
     res.json({ message: `Event ${status} successfully`, event });
   } catch (error) {
@@ -155,6 +211,10 @@ const createClub = async (req, res) => {
 
     if (!clubName || !adminName || !adminEmail || !password) {
       return res.status(400).json({ message: "Missing required club registration fields" });
+    }
+
+    if (!isPasswordValid(password)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const existingUser = await User.findOne({ email: adminEmail.toLowerCase().trim() });
@@ -223,44 +283,116 @@ const resolveConflict = async (req, res) => {
 
   try {
     const { eventId } = req.params;
-    const event = await Event.findById(eventId);
+    const otherEvent = req.body?.otherEventId ? await Event.findById(req.body.otherEventId) : null;
+    let event = await Event.findById(eventId);
 
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
 
+    // Preserve an already approved event when the conflicting event is still pending.
+    if (event.status === "approved" && otherEvent?.status === "pending") {
+      event = otherEvent;
+    }
+
     const allEvents = await Event.find({
       _id: { $ne: event._id },
       status: { $in: ["approved", "pending"] },
-      date: event.date,
     }).lean();
 
-    const candidateVenues = ["Main Hall", "Lecture Room A", "Conference Room", "Auditorium", "Open Ground", "Seminar Room"];
-    const nextVenue = candidateVenues.find((venue) => !allEvents.some((candidate) => candidate.location?.toLowerCase() === venue.toLowerCase()));
-
-    if (nextVenue) {
-      event.location = nextVenue;
-      await event.save();
-      return res.json({ message: "Event moved to an alternate venue", event });
+    const original = {
+      date: new Date(event.date),
+      startTime: event.startTime,
+      endTime: event.endTime,
+      location: event.location,
+    };
+    const duration = timeToMinutes(event.endTime) - timeToMinutes(event.startTime);
+    if (duration <= 0) {
+      return res.status(400).json({ message: "The event has an invalid time period" });
     }
 
-    const nextDay = new Date(event.date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const sameDayConflict = allEvents.some((candidate) => candidate.date && new Date(candidate.date).toISOString().split("T")[0] === nextDay.toISOString().split("T")[0]);
+    const isFree = (candidate) => !allEvents.some((existing) => isOverlapping(candidate, existing));
+    let resolved = null;
+    let resolutionType = "";
 
-    if (!sameDayConflict) {
-      event.date = nextDay;
-      await event.save();
-      return res.json({ message: "Event moved to another date", event });
+    // First keep the date and time, and find another venue from the event form.
+    for (const location of EVENT_LOCATIONS) {
+      const candidate = { ...original, location };
+      if (location !== original.location && isFree(candidate)) {
+        resolved = candidate;
+        resolutionType = "venue";
+        break;
+      }
     }
 
-    const newStartTime = timeToMinutes(event.startTime) + 60;
-    const newEndTime = timeToMinutes(event.endTime) + 60;
-    event.startTime = `${String(Math.floor(newStartTime / 60)).padStart(2, "0")}:${String(newStartTime % 60).padStart(2, "0")}`;
-    event.endTime = `${String(Math.floor(newEndTime / 60)).padStart(2, "0")}:${String(newEndTime % 60).padStart(2, "0")}`;
+    // If all venues are occupied, keep the date and venue and find a 30-minute-aligned slot.
+    if (!resolved) {
+      for (let start = 8 * 60; start + duration <= 21 * 60; start += 30) {
+        const candidate = {
+          ...original,
+          startTime: minutesToTime(start),
+          endTime: minutesToTime(start + duration),
+        };
+        if (candidate.startTime !== original.startTime && isFree(candidate)) {
+          resolved = candidate;
+          resolutionType = "time";
+          break;
+        }
+      }
+    }
+
+    // Finally search future dates, checking every configured venue and time slot.
+    for (let dayOffset = 1; !resolved && dayOffset <= 365; dayOffset += 1) {
+      const candidateDate = new Date(original.date);
+      candidateDate.setUTCDate(candidateDate.getUTCDate() + dayOffset);
+      for (const location of EVENT_LOCATIONS) {
+        for (let start = 8 * 60; start + duration <= 21 * 60; start += 30) {
+          const candidate = {
+            date: candidateDate,
+            location,
+            startTime: minutesToTime(start),
+            endTime: minutesToTime(start + duration),
+          };
+          if (isFree(candidate)) {
+            resolved = candidate;
+            resolutionType = "date";
+            break;
+          }
+        }
+        if (resolved) break;
+      }
+    }
+
+    if (!resolved) {
+      return res.status(409).json({ message: "No free venue, time, or date could be found" });
+    }
+
+    event.date = resolved.date;
+    event.location = resolved.location;
+    event.startTime = resolved.startTime;
+    event.endTime = resolved.endTime;
+    event.status = "pending";
     await event.save();
 
-    res.json({ message: "Event moved to another time slot", event });
+    await notifySafely(() =>
+      notificationService.notifyUser(event.createdBy, {
+        actorUserId: req.user.id,
+        title: "Event conflict resolved",
+        message: `“${event.title}” was moved to ${dateKey(event.date)} at ${event.startTime}-${event.endTime} in ${event.location}. It is awaiting system-admin approval.`,
+        type: "EVENT_UPDATED",
+        category: "EVENTS",
+        priority: "HIGH",
+        entityType: "Event",
+        entityId: event._id.toString(),
+        actionUrl: "/club-admin",
+        deduplicationKey: `CONFLICT_RESOLVED:${event._id}:${event.__v}`,
+      })
+    );
+
+    res.json({
+      message: `Conflict resolved using a new ${resolutionType}. The event is pending approval.`,
+      event,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Unable to resolve conflict", error: error.message });

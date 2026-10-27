@@ -66,6 +66,7 @@ const ensureSystemAdmin = (req, res) => {
 
 const getAdminStats = async (req, res) => {
   if (!ensureSystemAdmin(req, res)) return;
+  //
 
   try {
     const totalClubs = await User.distinct("clubName", { clubName: { $exists: true, $ne: "" } }).then((clubs) => clubs.length);

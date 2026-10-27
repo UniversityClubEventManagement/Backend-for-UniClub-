@@ -8,9 +8,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://shaunkeithjosephs_db_user:Oh39FU7NUGgexA57@cluster0.ltmkpxw.mongodb.net/?appName=Cluster0";
-const LOCAL_MONGO_URI = "mongodb://127.0.0.1:27017/uniClub";
+//const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://shaunkeithjosephs_db_user:Oh39FU7NUGgexA57@cluster0.ltmkpxw.mongodb.net/?appName=Cluster0";
+//const LOCAL_MONGO_URI = "mongodb://127.0.0.1:27017/uniClub";
 
+//
+const MONGO_URI = process.env.MONGO_URI;
+
+if (!MONGO_URI) {
+  console.error("MONGO_URI is missing. Please add it to your .env file.");
+  process.exit(1);
+}
+
+console.log("Connecting to MongoDB...");
+//
 console.log(`Connecting to MongoDB using URI: ${MONGO_URI}`);
 
 const connectMongo = async (uri) => {
@@ -24,7 +34,7 @@ const connectMongo = async (uri) => {
     return false;
   }
 };
-
+/*
 (async () => {
   const connected = await connectMongo(MONGO_URI);
   if (!connected && MONGO_URI !== LOCAL_MONGO_URI) {
@@ -32,7 +42,13 @@ const connectMongo = async (uri) => {
     await connectMongo(LOCAL_MONGO_URI);
   }
 })();
+*/
 
+//
+(async () => {
+  await connectMongo(MONGO_URI);
+})();
+//
 app.get("/", (req, res) => {
   res.send("Backend is running");
 });

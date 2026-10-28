@@ -36,6 +36,22 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+
+    studentRegistrationNumber: {
+  type: String,
+  trim: true,
+  uppercase: true,
+  match: [
+    /^EG\/\d{4}\/\d{4}$/,
+    "Registration number must use the format EG/1234/5678",
+  ],
+  unique: true,
+  sparse: true,
+  required: function () {
+    return this.role === "student";
+  },
+},
+
     clubName: {
       type: String,
       trim: true,

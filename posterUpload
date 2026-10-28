@@ -1,0 +1,28 @@
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const multer = require("multer");
+
+const uploadDirectory = path.join(__dirname, "..", "uploads", "posters");
+fs.mkdirSync(uploadDirectory, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, callback) => callback(null, uploadDirectory),
+  filename: (_req, file, callback) => {
+    const extension = file.mimetype === "image/png" ? ".png" : ".jpg";
+    callback(null, `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${extension}`);
+  },
+});
+
+const posterUpload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (!["image/jpeg", "image/png"].includes(file.mimetype)) {
+      return callback(new Error("Only PNG and JPG poster images are allowed"));
+    }
+    callback(null, true);
+  },
+});
+
+module.exports = { posterUpload };

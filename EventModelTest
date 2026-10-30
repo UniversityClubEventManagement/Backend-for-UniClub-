@@ -1,0 +1,74 @@
+
+const Event = require("../models/Event");
+
+describe("Event Model Validation", () => {
+  const validEvent = {
+    title: "Electrical Engineering Workshop",
+    description: "A workshop for engineering students",
+    category: "Workshop",
+    date: new Date("2026-12-15"),
+    startTime: "09:00",
+    endTime: "12:00",
+    location: "Engineering Faculty Auditorium",
+    registrationDeadline: new Date("2026-12-10"),
+    clubName: "Electrical Engineering Society",
+    createdBy: "507f1f77bcf86cd799439011",
+  };
+
+  test("should accept a valid event", () => {
+    const event = new Event(validEvent);
+
+    const error = event.validateSync();
+
+    expect(error).toBeUndefined();
+    expect(event.status).toBe("pending");
+  });
+
+  test("should reject an event without a title", () => {
+    const event = new Event({
+      ...validEvent,
+      title: "",
+    });
+
+    const error = event.validateSync();
+
+    expect(error).toBeDefined();
+    expect(error.errors.title).toBeDefined();
+  });
+
+  test("should reject an invalid event category", () => {
+    const event = new Event({
+      ...validEvent,
+      category: "Invalid Category",
+    });
+
+    const error = event.validateSync();
+
+    expect(error).toBeDefined();
+    expect(error.errors.category).toBeDefined();
+  });
+
+  test("should reject an event without a location", () => {
+    const event = new Event({
+      ...validEvent,
+      location: "",
+    });
+
+    const error = event.validateSync();
+
+    expect(error).toBeDefined();
+    expect(error.errors.location).toBeDefined();
+  });
+
+  test("should reject an invalid event status", () => {
+    const event = new Event({
+      ...validEvent,
+      status: "completed",
+    });
+
+    const error = event.validateSync();
+
+    expect(error).toBeDefined();
+    expect(error.errors.status).toBeDefined();
+  });
+});

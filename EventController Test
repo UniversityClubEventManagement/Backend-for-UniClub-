@@ -1,0 +1,274 @@
+
+// Mock the Event model so tests do not access MongoDB
+jest.mock("../models/Event", () => ({
+  create: jest.fn(),
+}));
+
+// Mock the notification service
+jest.mock("../services/notificationService", () => ({
+  notifyRole: jest.fn().mockResolvedValue(undefined),
+}));
+
+const Event = require("../models/Event");
+const notificationService = require("../services/notificationService");
+const { createEvent } = require("../controllers/eventController");
+
+// Create mock Express request and response objects
+const createMockResponse = () => {
+  const res = {};
+
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
+
+  return res;
+};
+
+// Valid event data for testing
+const validEventData = {
+  title: "Electrical Engineering Workshop",
+  description: "A workshop about electrical engineering.",
+  category: "Workshop",
+  date: "2026-12-15",
+  startTime: "09:00",
+  endTime: "12:00",
+  location: "Engineering Faculty Auditorium",
+  registrationLimit: 50,
+  registrationDeadline: "2026-12-10",
+  bannerUrl: "/uploads/posters/test.jpg",
+};
+
+// Reset mocks before each test
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+// TC01: Successfully create an event as a Club Admin
+test("should create an event successfully for a Club Admin", async () => {
+  const req = {
+    body: validEventData,
+    user: {
+      id: "clubadmin123",
+      role: "club-admin",
+      clubName: "Electrical Engineering Society",
+    },
+  };
+
+  const res = createMockResponse();
+
+  const savedEvent = {
+    ...validEventData,
+    clubName: "Electrical Engineering Society",
+    createdBy: "clubadmin123",
+    status: "pending",
+    _id: "event123",
+    createdAt: new Date(),
+  };
+
+  Event.create.mockResolvedValue(savedEvent);
+
+  await createEvent(req, res);
+
+  expect(Event.create).toHaveBeenCalledTimes(1);
+
+  expect(Event.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: validEventData.title,
+      clubName: "Electrical Engineering Society",
+      createdBy: "clubadmin123",
+      status: "pending",
+    })
+  );
+
+  expect(res.status).toHaveBeenCalledWith(201);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Event created successfully",
+      event: savedEvent,
+    })
+  );
+});
+
+// TC02-TC06: Check missing required fields
+test.each([
+  ["title", "Event title"],
+  ["description", "Description"],
+  ["category", "Category"],
+  ["date", "Date"],
+  ["startTime", "Start time"],
+  ["endTime", "End time"],
+  ["location", "Location"],
+  ["registrationDeadline", "Registration deadline"],
+])("should reject an event when %s is missing", async (field) => {
+  const body = { ...validEventData };
+  delete body[field];
+
+  const req = {
+    body,
+    user: {
+      id: "clubadmin123",
+      role: "club-admin",
+      clubName: "Electrical Engineering Society",
+    },
+  };
+
+  const res = createMockResponse();
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith({
+    message: "Missing required event fields",
+  });
+
+  expect(Event.create).not.toHaveBeenCalled();
+});
+
+// TC07: Reject an unauthenticated user
+test("should reject a request when the user is not authenticated", async () => {
+  const req = {
+    body: validEventData,
+    user: null,
+  };
+
+  const res = createMockResponse();
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(401);
+  expect(Event.create).not.toHaveBeenCalled();
+});
+
+// TC08: Reject a student
+test("should reject a student attempting to create an event", async () => {
+  const req = {
+    body: validEventData,
+    user: {
+      id: "student123",
+      role: "student",
+    },
+  };
+
+  const res = createMockResponse();
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(Event.create).not.toHaveBeenCalled();
+});
+
+// TC09: Reject a Club Admin without a club name
+test("should reject a Club Admin without a club name", async () => {
+  const req = {
+    body: validEventData,
+    user: {
+      id: "clubadmin123",
+      role: "club-admin",
+      clubName: "",
+    },
+  };
+
+  const res = createMockResponse();
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith({
+    message: "Club name is required for event creation",
+  });
+
+  expect(Event.create).not.toHaveBeenCalled();
+});
+
+// TC10: System Admin creates an event for a specified club
+test("should allow a System Admin to create an event for a club", async () => {
+  const req = {
+    body: {
+      ...validEventData,
+      clubName: "Robotics Club",
+    },
+    user: {
+      id: "admin123",
+      role: "system-admin",
+    },
+  };
+
+  const res = createMockResponse();
+
+  Event.create.mockResolvedValue({
+    ...validEventData,
+    clubName: "Robotics Club",
+    createdBy: "admin123",
+    status: "pending",
+    _id: "event456",
+    createdAt: new Date(),
+  });
+
+  await createEvent(req, res);
+
+  expect(Event.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      clubName: "Robotics Club",
+      createdBy: "admin123",
+      status: "pending",
+    })
+  );
+
+  expect(res.status).toHaveBeenCalledWith(201);
+});
+
+// TC11: Handle a database creation error
+test("should return HTTP 500 when event creation fails", async () => {
+  const req = {
+    body: validEventData,
+    user: {
+      id: "clubadmin123",
+      role: "club-admin",
+      clubName: "Electrical Engineering Society",
+    },
+  };
+
+  const res = createMockResponse();
+
+  Event.create.mockRejectedValue(new Error("Database error"));
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Unable to create event",
+      error: "Database error",
+    })
+  );
+});
+
+// TC12: Notification failure should not cancel event creation
+test("should still create the event if notification delivery fails", async () => {
+  const req = {
+    body: validEventData,
+    user: {
+      id: "clubadmin123",
+      role: "club-admin",
+      clubName: "Electrical Engineering Society",
+    },
+  };
+
+  const res = createMockResponse();
+
+  Event.create.mockResolvedValue({
+    ...validEventData,
+    clubName: "Electrical Engineering Society",
+    createdBy: "clubadmin123",
+    status: "pending",
+    _id: "event789",
+    createdAt: new Date(),
+  });
+
+  notificationService.notifyRole.mockRejectedValue(
+    new Error("Notification service unavailable")
+  );
+
+  await createEvent(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(201);
+});
